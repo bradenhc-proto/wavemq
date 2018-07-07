@@ -325,7 +325,8 @@ func (h PublishRelProperties) Encode() (buf []byte, err error) {
 // to contain the provided length value in the encoded format specified in the MQTT protocol
 // specifications. It will also update the internal offset of the packet so that the rest of
 // the packet can be created. This function should only be called when building a packet to send
-func encodeRemainingLength(p *packet, length uint32) {
+func encodeRemainingLength(length uint32) []byte {
+	buf := make([]byte, 0)
 	var encoded byte
 	for length > 0 {
 		encoded = byte(length % 0x80)
@@ -333,23 +334,26 @@ func encodeRemainingLength(p *packet, length uint32) {
 		if length > 0 {
 			encoded |= 0x80
 		}
-		p.buffer.WriteByte(encoded)
+		buf = append(buf, encoded)
 	}
+	return buf
 }
 
 // decodeRemainingLength looks at a packet's internal buffer and decodes the value of the
 // remaining length s. It also updates the internal read offset by first setting it to 1 (the
 // expected location of the start of the remaining length s) and incrementing it so that it
 // ends at the start of the variable length header or payload (depending on the packet type)
-func decodeRemainingLength(p *packet) (value uint32, err error) {
+func decodeRemainingLength(buf []byte) (value uint32, err error) {
 	var multiplier uint32 = 1
 	var encoded byte
+	var index = 0
 	first := true
 	for (encoded&0x80) != 0 || first {
 		if first {
 			first = false
 		}
-		encoded, err = p.buffer.ReadByte()
+		encoded = buf[index]
+		index++
 		if err != nil {
 			return 0, err
 		}
@@ -390,7 +394,8 @@ func (p *packet) encode() (err error) {
 	// Write the fixed header
 	control := p.ptype | p.pflags
 	p.buffer.WriteByte(control)
-	encodeRemainingLength(p, length)
+	l := encodeRemainingLength(length)
+	p.buffer.Write(l)
 
 	// Add the variable header
 	p.buffer.Write(vheaderBytes)
@@ -441,7 +446,7 @@ func (p *packet) initPublish(properties PublishProperties, payload interface{}) 
 	if properties.DupFlag {
 		pflags |= byte(0x08)
 	}
-	plags |= byte(properties.QoSLevel)
+	pflags |= byte(properties.QoSLevel)
 	if properties.Retain {
 		pflags |= byte(0x01)
 	}

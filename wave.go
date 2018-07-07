@@ -1,21 +1,12 @@
 package wavemq
 
-// ConnectionProperties ...
-type ConnectionProperties struct {
-	Username         string
-	Password         []byte
-	WillTopic        string
-	WillMessage      string
-	KeepAliveTimeout uint16
-}
-
 // Session ...
 type Session struct {
-	Name          string
-	ServerAddress string
-	identifier    string
-	Flags         Flags
-	state         interface{}
+	Name                 string
+	ServerAddress        string
+	identifier           string
+	ConnectionProperties ConnectProperties
+	state                interface{}
 }
 
 // Topic represents the identifier for the topic and the structure of the message that will
@@ -32,7 +23,7 @@ type Client struct {
 }
 
 // Connect ... returns the session name
-func (c *Client) Connect(server string, properties ConnectionProperties) (string, error) {
+func (c *Client) Connect(server string, properties ConnectProperties) (string, error) {
 	return "", nil
 }
 
