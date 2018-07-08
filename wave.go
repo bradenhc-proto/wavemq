@@ -1,5 +1,10 @@
 package wavemq
 
+import (
+	"bytes"
+	"encoding/gob"
+)
+
 // Session ...
 type Session struct {
 	Name                 string
@@ -9,46 +14,22 @@ type Session struct {
 	state                interface{}
 }
 
-// Topic represents the identifier for the topic and the structure of the message that will
-// be discussed. The structure is used to register the type with the internal encoder.
-type Topic struct {
-	name    string
-	message interface{}
-}
-
-// Client ...
-type Client struct {
-	Persist  bool
-	Sessions map[string]Session
-}
-
-// Connect ... returns the session name
-func (c *Client) Connect(server string, properties ConnectProperties) (string, error) {
-	return "", nil
-}
-
-// Reconnect ...
-func (c *Client) Reconnect(session Session) error {
-	return nil
-}
-
-// Close ...
-func (c *Client) Close() error {
-	return nil
-}
-
-// SubscribeTo ...
-func (c *Client) SubscribeTo(topic Topic) SubscribeChannel {
-	return SubscribeChannel{}
-}
-
-// PublishOn ...
-func (c *Client) PublishOn(topic Topic) PublishChannel {
-	return PublishChannel{}
-}
-
 // SubscribeChannel ...
 type SubscribeChannel struct {
+	topic   *Topic
+	decoder *gob.Decoder
+	buf     bytes.Buffer
+	asynch  bool
+}
+
+// NewSubscribeChannel ...
+func NewSubscribeChannel(t *Topic) *SubscribeChannel {
+	ch := SubscribeChannel{topic: t}
+	_, ok := t.Message.(Encodeable)
+	if !ok {
+		ch.decoder = gob.NewDecoder(&ch.buf)
+	}
+	return &ch
 }
 
 // Receive ...
@@ -63,6 +44,20 @@ func (sc *SubscribeChannel) ReceiveIn(target interface{}) {
 
 // PublishChannel ...
 type PublishChannel struct {
+	topic   *Topic
+	encoder *gob.Encoder
+	buf     *bytes.Buffer
+	asynch  bool
+}
+
+// NewPublishChannel ...
+func NewPublishChannel(t *Topic) *PublishChannel {
+	ch := PublishChannel{topic: t}
+	_, ok := t.Message.(Encodeable)
+	if !ok {
+		ch.encoder = gob.NewEncoder(&ch.buf)
+	}
+	return &ch
 }
 
 // Send ...

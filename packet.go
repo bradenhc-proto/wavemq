@@ -4,7 +4,13 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+	"regexp"
+	"unicode"
+	"unicode/utf8"
 )
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Constants
 
 // The following constants define the control packet types and their assocaited flags for the MQTT 3.1.1 protocol.
 // The control type together with the flag represents the first byte if each packet sent in MQTT. In order to
@@ -92,6 +98,9 @@ const (
 	QoSExactlyOnce QoSLevel = 0x04
 )
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Packet Definition
+
 // packet represents a MQTT packet that is either sent or received.
 type packet struct {
 	ptype      byte
@@ -101,6 +110,9 @@ type packet struct {
 	payload    interface{}
 	buffer     bytes.Buffer
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Packet Properties (variable headers), fixed payloads, and encoding implementations
 
 // Encodeable defines an interface that, when implemented, specifies how a structure is to be encoded into a buffer
 // (i.e. a slice of bytes). All variable headers (packet properties in WaveMQ) implement this interface. Some payloads
@@ -112,6 +124,7 @@ type packet struct {
 // serialize and deserialize data structures
 type Encodeable interface {
 	Encode() ([]byte, error)
+	//Decode([]byte) (Encodeable, error)
 }
 
 // ConnectProperties summarizes the properties found in the variable header of the CONNECT
@@ -133,10 +146,10 @@ type ConnectProperties struct {
 func (h ConnectProperties) Encode() (buf []byte, err error) {
 	buffer := bytes.Buffer{}
 	// Write the variable header
-	protocolNameBytes := []byte(h.ProtocolName)
-	buffer.WriteByte(byte(len(h.ProtocolName)))
-	buffer.Write(protocolNameBytes)
-	buffer.WriteByte(byte(h.ProtocolLevel))
+	err = writeIfValidUtf8(&buffer, h.ProtocolName, true)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check the flags and write it to the buffer
 	var flagsByte byte
@@ -174,41 +187,48 @@ func (h ConnectProperties) Encode() (buf []byte, err error) {
 type ConnectPayload struct {
 	Identifier  string
 	WillTopic   string
-	WillMessage string
+	WillMessage interface{}
 	UserName    string
 	Password    []byte
 }
 
 // Encode writes the payload content for a CONNECT control packet, which has a specific format. This is an
 // implementation of the Encodeable interface.
-func (p ConnectPayload) Encode() (buf []byte, err error) {
+func (p ConnectPayload) Encode() ([]byte, error) {
 	buffer := bytes.Buffer{}
 
-	// Encode the identifier
-	// TODO: verify the identifier is UTF-8 encoded and contains only valid characters
-	bytes := []byte(p.Identifier)
-	length := uint16(len(bytes))
-	buffer.WriteByte(byte(length & 0xF0))
-	buffer.WriteByte(byte(length & 0x0F))
-	buffer.Write(bytes)
+	// Encode the identifier after verifying it is valid
+	matched, err := regexp.MatchString("[^A-Za-z0-9]+", p.Identifier)
+	if matched || err != nil {
+		return nil, errors.New("Client identifier must only contain characters A-Z, a-z, or a number")
+	} else if l := len(p.Identifier); 1 <= l && l <= 23 {
+		return nil, errors.New("Client identifier must be between 1 and 23 bytes")
+	}
+	err = writeIfValidUtf8(&buffer, p.Identifier, true)
+	if err != nil {
+		return nil, err
+	}
 
 	// Encode the will topic
-	// TODO: verify that the topic is UTF-8 encoded
-	bytes = []byte(p.WillTopic)
-	length = uint16(len(bytes))
-	buffer.WriteByte(byte(length & 0xF0))
-	buffer.WriteByte(byte(length & 0x0F))
-	buffer.Write(bytes)
+	if len(p.WillTopic) != 0 {
+		err = writeIfValidUtf8(&buffer, p.WillTopic, true)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Encode the will message
-	bytes = []byte(p.WillMessage)
-	length = uint16(len(bytes))
-	buffer.WriteByte(byte(length & 0xF0))
-	buffer.WriteByte(byte(length & 0x0F))
-	buffer.Write(bytes)
+	if len(p.WillMessage) != 0 {
+		err = writeIfValidUtf8(&buffer, p.WillMessage, true)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Encode the user name
-	// TODO: verify the username is UTF-8 encoded
+	if !utf8.ValidString(p.UserName) {
+		return nil, errors.New("Invalid UTF-8 encoded user name")
+	}
 	bytes = []byte(p.UserName)
 	length = uint16(len(bytes))
 	buffer.WriteByte(byte(length & 0xF0))
@@ -321,6 +341,122 @@ func (h PublishRelProperties) Encode() (buf []byte, err error) {
 	return buf, err
 }
 
+// PublishCompProperties defines the fields of the variable header for a PUBCOMP packet.
+type PublishCompProperties struct {
+	PacketID uint16
+}
+
+// Encode writes the variable header of the PUBCOMP message to a byte buffer using the fields and values from the
+// PublishCompProperties struct. This is an implementation of the Encodeable interface.
+func (h PublishCompProperties) Encode() (buf []byte, err error) {
+	buffer := bytes.Buffer{}
+	buffer.WriteByte(byte(h.PacketID & 0xF0))
+	buffer.WriteByte(byte(h.PacketID & 0x0F))
+	buf = buffer.Bytes()
+	return buf, err
+}
+
+// SubscribeProperties defines the fields of the variable header for a SUBSCRIBE control packet.
+type SubscribeProperties struct {
+	PacketID uint16
+}
+
+// Encode writes the variable header of the SUBSCRIBE message to a byte buffer using the fields and values from the
+// SubscribeProperties struct. This is an implementation of the Encodeable interface.
+func (h SubscribeProperties) Encode() (buf []byte, err error) {
+	buffer := bytes.Buffer{}
+	buffer.WriteByte(byte(h.PacketID & 0xF0))
+	buffer.WriteByte(byte(h.PacketID & 0x0F))
+	buf = buffer.Bytes()
+	return buf, err
+}
+
+// SubscribePayload defines the payload of a SUBSCRIBE packet
+type SubscribePayload struct {
+	Topics map[string]QoSLevel
+}
+
+// Encode writes the payload of the SUBSCRIBE message to a byte buffer using the fields and values from the
+// SubscribePayload struct. This is an implementation of the Encodeable interface.
+func (p SubscribePayload) Encode() (buf []byte, err error) {
+	if len(p.Topics) == 0 {
+		err = errors.New("SUBSCRIBE payload must have at least one topic/quality of service pair")
+		return nil, err
+	}
+	buffer := bytes.Buffer{}
+	for topic, qos := range p.Topics {
+		if !utf8.ValidString(topic) {
+			return nil, errors.New("Invalid UTF-8 encoded topic")
+		}
+		buf = []byte(topic)
+		buflen := uint16(len(buf))
+		buffer.WriteByte(byte(buflen & 0xF0))
+		buffer.WriteByte(byte(buflen & 0x0F))
+		buffer.Write(buf)
+		buffer.WriteByte(byte(qos) >> 1)
+	}
+	return buffer.Bytes(), err
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Whole Packet Encoding/Decoding
+
+// writeIfValidUtf8 will take a string and verify that it complies with UTF-8 encoding rules as defined in the Unicode
+// spec and RC3629 before writing it to the provided buffer. It ensures that the string will comply with the MQTT \
+// protocol, returning an error if the string is not properly encoded or contains the null character (U-000).
+// REQ: MQTT-1.5.3-1
+func writeIfValidUtf8(buf *bytes.Buffer, s string, writeLength bool) error {
+	if writeLength {
+		length := uint16(len(s))
+		buf.WriteByte(byte(length & 0xF0))
+		buf.WriteByte(byte(length & 0x0F))
+	}
+	for c := range s {
+		r := rune(c)
+		if !utf8.ValidRune(r) {
+			return errors.New("Invalid UTF-8 encoded string")
+		} else if r == 0 {
+			return errors.New("The encoding of the NULL character (U-000) is not allowed in MQTT")
+		} else if r <= 31 || (127 <= r && r <= 159) {
+			return errors.New("UTF-8 control characters are not allowed in MQTT")
+		}
+		buf.WriteRune(r)
+	}
+	return nil
+}
+
+// writeInterface will write the struct passed as the value paramter to the provided buffer. The value interface MAY
+// implement the Encodeable interface, in which case it will have an Encode() function defined on it. If this is the
+// case, this function will encode the value using that function. If there is no Encode() function defined on the
+// provided value, then this function will use the "encoding/gob" package to encode the value.
+func writeInterface(buf *bytes.Buffer, value interface{}) error {
+	return nil
+}
+
+// readIfValidUtf8 will take a bytes Buffer and the length it should read from the buffer and verifies that any bytes
+// it reads are valid runes (UTF-8 encoded characters) and are not the null character (U-000). If it encounters an
+// invalid runes, then it will return the empty string and an error. Otherwise it will return a string containing the
+// read values and nil for the error
+// REQ: MQTT-1.5.3-1
+func readIfValidUtf8(buf *bytes.Buffer, size int) (string, error) {
+	runes := make([]rune, 1)
+	for size > 0 {
+		r, s, err := buf.ReadRune()
+		if err != nil {
+			return "", err
+		} else if r == 0 {
+			return "", errors.New("The encoding the the NULL character (U-000) is not allowed in MQTT")
+		} else if r == unicode.ReplacementChar {
+			return "", errors.New("Invalid UTF-8 encoded rune encountered")
+		} else if r <= 31 || (127 <= r && r <= 159) {
+			return "", errors.New("UTF-8 control characters are not allowed in MQTT")
+		}
+		runes = append(runes, r)
+		size -= s
+	}
+	return string(runes), nil
+}
+
 // encodeRemainingLength operates on a pointer a packet struct by modifying its internal buffer
 // to contain the provided length value in the encoded format specified in the MQTT protocol
 // specifications. It will also update the internal offset of the packet so that the rest of
@@ -413,6 +549,9 @@ func (p *packet) encode() (err error) {
 func (p *packet) decode(buffer []byte) (err error) {
 	return err
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Packet Construction
 
 // initConnect uses the provided properties and payload to initialize the packet as a CONNECT control packet ready to
 // be encoded and sent over the network.

@@ -11,7 +11,7 @@ type packet struct {
     ptype byte
     pflags byte
     length uint32
-    properties interface{}
+    properties Encodeable
     payload interface{}
     buffer bytes.Buffer
 }
