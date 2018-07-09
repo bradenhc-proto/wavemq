@@ -2,4 +2,4 @@
 
 ![wave-mq-logo][logo]
 
-[logo]: /resources/wavemq.png "WaveMQ"
+[logo]: /wavemq/docs/resources/wavemq.png "WaveMQ"
