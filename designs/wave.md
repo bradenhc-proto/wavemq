@@ -12,13 +12,16 @@ type Message struct {
 }
 
 func main() {
+    // Initializing the client and connecting
+    // WaveMQ can be configured to associate names with IP addresses in a config file (or using /etc/hosts),
+    // so you don't need to pass an IP address to make it work. The string 'localhost' also works. Can also
+    // use names of machines on the same network. Default port is already set.
     client := wavemq.Client{}
-    client.Connect("192.168.1.124", wavemq.ConnectionProperties{})
+    client.Connect("192.168.1.124", wavemq.ConnectProperties{})
 
     // OR ----------------------------------------------------------------------------------------
     // For an existing session or one saved previously
-    session := client.GetSession("key")
-    client.Reconnect(session)
+    client.Reconnect("id")
     // -------------------------------------------------------------------------------------------
 
     topic := wavemq.Topic{name: "my-sub-topic", message: Message{}}
@@ -32,7 +35,9 @@ func main() {
     // The below method is an event-based implementation (remove a lot of heavy lifting on the part
     // of the developer). Perhaps leave it up to them to decide??
     // Registering a callback in this way is thread safe up to the point of the subscribing function
-    subscriptionChannel := client.SubscribeTo(topic, func(message Message){
+    // NOTE: YOU CANNOT SUBSCRIBE TO A TOPIC BOTH SYNCHRONOUSLY AND ASYNCHRONOUSLY. You must choose
+    // one or the other. Attempting to do both will result in an error (panic??)
+    subscriptionChannel := client.SubscribeToAsynch(topic, func(message Message){
         // Do something with the message here
         // Be sure the argument is of the same type of the topic message, otherwise there
         // will be problems

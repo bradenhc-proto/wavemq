@@ -15,13 +15,13 @@ type Client struct {
 	messages    map[string]bool
 }
 
-// Connect ... returns the session name
+// Connect ... returns the session id, which can be used as the key to restore the session
 func (c *Client) Connect(server string, properties ConnectProperties) (string, error) {
 	return "", nil
 }
 
 // Reconnect ...
-func (c *Client) Reconnect(session Session) error {
+func (c *Client) Reconnect(sessionID string) error {
 	return nil
 }
 
