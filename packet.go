@@ -2,7 +2,6 @@ package wavemq
 
 import (
 	"bytes"
-	"encoding/gob"
 	"errors"
 	"regexp"
 	"unicode"
@@ -16,30 +15,32 @@ import (
 // The control type together with the flag represents the first byte if each packet sent in MQTT. In order to
 // create this first byte, WaveMQ will perform a bitwise OR operation on the two bytes representing the type and
 // flags respectively.
+//
+// In accordance with the specification, these values are constant so that WaveMQ can determine if invalid flags
+// are attached to each reserved control packet.
+//
+// REQ: MQTT-2.2.2-1
 const (
 	// ptypeConnect is the control packet type for client request to connect to a server
 	ptypeConnect byte = 0x10
 	// ptypeConnack is the control packet type for connection acknowledgment by the server
 	ptypeConnack byte = 0x20
-	// ptypePublish is the control packet type for a publish message sent from client to server or
-	// server to client
+	// ptypePublish is the control packet type for a publish message sent from client to server or server to client
 	ptypePublish byte = 0x30
-	// ptypePuback is the control packet for an acknowledged PUBLISH packet. It can be sent from client
-	// to server or server to client.
+	// ptypePuback is the control packet for a PUBACK. Can be sent from client to server or  server to client.
 	ptypePuback byte = 0x40
-	// ptypePubrec is the publish received control packet type (part one of assured delivery). Sent by
-	// the client or server.
+	// ptypePubrec is the publish received control packet type (part one of assured delivery). Sent by the client or
+	// server.
 	ptypePubrec byte = 0x50
-	// ptypePubrel is the publish released control packet type (part two of assured delivery). Sent by
-	// the client or server.
+	// ptypePubrel is the publish released control packet type (part two of assured delivery). Sent by the client or
+	// server.
 	ptypePubrel byte = 0x60
-	// ptypePubcomp is the publish complete control packet type (part three of assured delivery). Sent
-	// by client or server.
+	// ptypePubcomp is the publish complete control packet type (part three of assured delivery). Sent by client or
+	// server.
 	ptypePubcomp byte = 0x70
 	// ptypeSubscribe is the control packet for a client subscrbe request. Sent by the client.
 	ptypeSubscribe byte = 0x80
-	// ptypeSuback is the control packet type for a client subscription acknowledgment. Sent by the
-	// the server.
+	// ptypeSuback is the control packet type for a client subscription acknowledgment. Sent by the server.
 	ptypeSuback byte = 0x90
 	// ptypeUnsubscribe is the control packet type for a unsubscribe request sent by the client
 	ptypeUnsubscribe byte = 0xA0
@@ -107,7 +108,7 @@ type packet struct {
 	pflags     byte
 	length     uint32
 	properties Encodeable
-	payload    interface{}
+	payload    []byte
 	buffer     bytes.Buffer
 }
 
@@ -125,6 +126,7 @@ type packet struct {
 type Encodeable interface {
 	Encode() ([]byte, error)
 	//Decode([]byte) (Encodeable, error)
+	// TODO: implement the Decode() function
 }
 
 // ConnectProperties summarizes the properties found in the variable header of the CONNECT
@@ -398,6 +400,106 @@ func (p SubscribePayload) Encode() (buf []byte, err error) {
 	return buffer.Bytes(), err
 }
 
+// SubscribeAckProperties defines the fields of the variable header for a SUBACK control packet.
+type SubscribeAckProperties struct {
+	PacketID uint16
+}
+
+// Encode writes the variable header of the SUBACK message to a byte buffer using the fields and values from the
+// SubscribeAckProperties struct. This is an implementation of the Encodeable interface.
+func (h SubscribeAckProperties) Encode() (buf []byte, err error) {
+	buffer := bytes.Buffer{}
+	buffer.WriteByte(byte(h.PacketID & 0xF0))
+	buffer.WriteByte(byte(h.PacketID & 0x0F))
+	buf = buffer.Bytes()
+	return buf, err
+}
+
+// SubscribeAckPayload defines the payload of the SUBACK packet, which comprises of a list of topics and their
+// quality of service levels matching the ones sent in the original SUBSCRIBE request.
+type SubscribeAckPayload struct {
+	Topics map[string]QoSLevel
+}
+
+// Encode writes the payload of the SUBACK message to a byte buffer using the fields and values from the
+// SubscribeAckPayload struct. This is an implementation of the Encodeable interface.
+func (p SubscribeAckPayload) Encode() (buf []byte, err error) {
+	if len(p.Topics) == 0 {
+		err = errors.New("SUBACK payload must have at least one topic/quality of service pair")
+		return nil, err
+	}
+	buffer := bytes.Buffer{}
+	for topic, qos := range p.Topics {
+		if !utf8.ValidString(topic) {
+			return nil, errors.New("Invalid UTF-8 encoded topic")
+		}
+		buf = []byte(topic)
+		buflen := uint16(len(buf))
+		buffer.WriteByte(byte(buflen & 0xF0))
+		buffer.WriteByte(byte(buflen & 0x0F))
+		buffer.Write(buf)
+		buffer.WriteByte(byte(qos) >> 1)
+	}
+	return buffer.Bytes(), err
+}
+
+// UnsubscribeProperties defines the fields of the variable header for a UNSUBSCRIBE control packet.
+type UnsubscribeProperties struct {
+	PacketID uint16
+}
+
+// Encode writes the variable header of the UNSUBSCRIBE message to a byte buffer using the fields and values from the
+// SubscribeProperties struct. This is an implementation of the Encodeable interface.
+func (h UnsubscribeProperties) Encode() (buf []byte, err error) {
+	buffer := bytes.Buffer{}
+	buffer.WriteByte(byte(h.PacketID & 0xF0))
+	buffer.WriteByte(byte(h.PacketID & 0x0F))
+	buf = buffer.Bytes()
+	return buf, err
+}
+
+// UnsubscribePayload defines the payload of a UNSUBSCRIBE packet
+type UnsubscribePayload struct {
+	Topics map[string]QoSLevel
+}
+
+// Encode writes the payload of the UNSUBSCRIBE message to a byte buffer using the fields and values from the
+// UnsubscribePayload struct. This is an implementation of the Encodeable interface.
+func (p UnsubscribePayload) Encode() (buf []byte, err error) {
+	if len(p.Topics) == 0 {
+		err = errors.New("SUBSCRIBE payload must have at least one topic/quality of service pair")
+		return nil, err
+	}
+	buffer := bytes.Buffer{}
+	for topic, qos := range p.Topics {
+		if !utf8.ValidString(topic) {
+			return nil, errors.New("Invalid UTF-8 encoded topic")
+		}
+		buf = []byte(topic)
+		buflen := uint16(len(buf))
+		buffer.WriteByte(byte(buflen & 0xF0))
+		buffer.WriteByte(byte(buflen & 0x0F))
+		buffer.Write(buf)
+		buffer.WriteByte(byte(qos) >> 1)
+	}
+	return buffer.Bytes(), err
+}
+
+// UnsubscribeAckProperties defines the fields of the variable header for a UNSUBACK control packet.
+type UnsubscribeAckProperties struct {
+	PacketID uint16
+}
+
+// Encode writes the variable header of the UNSUBACK message to a byte buffer using the fields and values from the
+// UnsubscribeAckProperties struct. This is an implementation of the Encodeable interface.
+func (h UnsubscribeAckProperties) Encode() (buf []byte, err error) {
+	buffer := bytes.Buffer{}
+	buffer.WriteByte(byte(h.PacketID & 0xF0))
+	buffer.WriteByte(byte(h.PacketID & 0x0F))
+	buf = buffer.Bytes()
+	return buf, err
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Whole Packet Encoding/Decoding
 
@@ -429,6 +531,8 @@ func writeIfValidUtf8(buf *bytes.Buffer, s string, writeLength bool) error {
 // implement the Encodeable interface, in which case it will have an Encode() function defined on it. If this is the
 // case, this function will encode the value using that function. If there is no Encode() function defined on the
 // provided value, then this function will use the "encoding/gob" package to encode the value.
+//
+// REQ: MQTT-1.5.3-1
 func writeInterface(buf *bytes.Buffer, value interface{}) error {
 	return nil
 }
@@ -436,7 +540,8 @@ func writeInterface(buf *bytes.Buffer, value interface{}) error {
 // readIfValidUtf8 will take a bytes Buffer and the length it should read from the buffer and verifies that any bytes
 // it reads are valid runes (UTF-8 encoded characters) and are not the null character (U-000). If it encounters an
 // invalid runes, then it will return the empty string and an error. Otherwise it will return a string containing the
-// read values and nil for the error
+// read values and nil for the error.
+//
 // REQ: MQTT-1.5.3-1
 func readIfValidUtf8(buf *bytes.Buffer, size int) (string, error) {
 	runes := make([]rune, 1)
@@ -510,7 +615,6 @@ func (p *packet) encode() (err error) {
 	// Reset the buffer in case it has already been written or a previous attempt failed
 	p.buffer.Reset()
 	var length uint32
-	payloadBuffer := bytes.Buffer{}
 	// Encode the variable header and payload in temporary buffers so that we know their length,
 	// but make sure we only include the payload if there is supposed to be one (and is one)
 	vheaderBytes, err := p.properties.Encode()
@@ -519,12 +623,7 @@ func (p *packet) encode() (err error) {
 	}
 	length += uint32(len(vheaderBytes))
 	if p.payload != nil {
-		encoder := gob.NewEncoder(&payloadBuffer)
-		err = encoder.Encode(p.payload)
-		if err != nil {
-			return err
-		}
-		length += uint32(payloadBuffer.Len())
+		length += uint32(len(p.payload))
 	}
 
 	// Write the fixed header
@@ -538,7 +637,7 @@ func (p *packet) encode() (err error) {
 
 	// Add the payload if there is one
 	if p.payload != nil {
-		p.buffer.Write(payloadBuffer.Bytes())
+		p.buffer.Write(p.payload)
 	}
 
 	return err
@@ -551,78 +650,81 @@ func (p *packet) decode(buffer []byte) (err error) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Packet Construction
+// Packet Construction/Initialization
 
-// initConnect uses the provided properties and payload to initialize the packet as a CONNECT control packet ready to
-// be encoded and sent over the network.
-func (p *packet) initConnect(properties ConnectProperties, payload ConnectPayload) {
-	p.buffer.Reset()
-	p.length = 0
-	p.ptype = ptypeConnect
-	p.pflags = pflagsConnect
-	p.properties = properties
-	p.payload = payload
+// newPacketConnect creates a new CONNECT packet ready to be encoded and sent over the network
+func newPacketConnect(properties ConnectProperties, payload ConnectPayload) *packet {
+	return &packet{ptype: ptypeConnect, pflags: pflagsConnect, properties: properties, payload: payload.Encode()}
 }
 
-// initConnectAck uses the provided properties to initialize the packet as a CONNACK control packet ready to be
-// encoded and sent over the network
-func (p *packet) initConnectAck(properties ConnectAckProperties) {
-	p.buffer.Reset()
-	p.length = 0
-	p.ptype = ptypeConnack
-	p.pflags = pflagsConnack
-	p.properties = properties
-	p.payload = nil
+// newPacketConnectAck creates a new CONNECT packet ready to be encoded and sent over the network
+func newPacketConnectAck(properties ConnectAckProperties) *packet {
+	return &packet{ptype: ptypeConnack, pflags: pflagsConnack, properties: properties}
 }
 
-// initPublish uses the provided properties and payload to initilaize the packet as a PUBLISH control packet ready
-// to be encoded and sent over the network
-func (p *packet) initPublish(properties PublishProperties, payload interface{}) {
-	p.buffer.Reset()
-	p.length = 0
-	p.ptype = ptypePublish
-	var pflags byte = 0x00
+// newPacketPublish creates a new PUBLISH packet ready to be encoded and sent over the network
+func newPacketPublish(properties PublishProperties, payload []byte) *packet {
+	flags := byte(properties.QoSLevel)
 	if properties.DupFlag {
-		pflags |= byte(0x08)
+		flags |= 0x08
 	}
-	pflags |= byte(properties.QoSLevel)
 	if properties.Retain {
-		pflags |= byte(0x01)
+		flags |= 0x01
 	}
-	p.pflags = pflags
-	p.properties = properties
-	p.payload = payload
+	return &packet{ptype: ptypePublish, pflags: flags, properties: properties, payload: payload}
 }
 
-// initPublishAck uses the provided properties to initialize the packet as a PUBACK control packet ready to be encoded
-// and sent over the network
-func (p *packet) initPublishAck(properties PublishAckProperties) {
-	p.buffer.Reset()
-	p.length = 0
-	p.ptype = ptypePuback
-	p.pflags = pflagsPuback
-	p.properties = properties
-	p.payload = nil
+// newPacketPublishAck creates a new PUBACK packet ready to be encoded and sent over the network
+func newPacketPublishAck(properties PublishAckProperties) *packet {
+	return &packet{ptype: ptypePuback, pflags: pflagsPuback, properties: properties, payload: nil}
 }
 
-// initPublishRec uses the provided properties to initialize the packet as a PUBREC control packet ready to be encoded
-// and sent over the network
-func (p *packet) initPublishRec(properties PublishRecProperties) {
-	p.buffer.Reset()
-	p.length = 0
-	p.ptype = ptypePubrec
-	p.pflags = pflagsPubrec
-	p.properties = properties
-	p.payload = nil
+// newPacketPublishRec creates a new PUBREC packet ready to be encoded and sent over the network
+func newPacketPublishRec(properties PublishRecProperties) *packet {
+	return &packet{ptype: ptypePubrec, pflags: pflagsPubrec, properties: properties}
 }
 
-// initPublishRel uses the provided properties to initialize the packet as a PUBREL control packet ready to be encoded
-// and sent over the network
-func (p *packet) initPublishRel(properties PublishRelProperties) {
-	p.buffer.Reset()
-	p.length = 0
-	p.ptype = ptypePubrel
-	p.pflags = pflagsPubrel
-	p.properties = properties
-	p.payload = nil
+// newPacketPublishRel creates a new PUBREL packet ready to be encoded and sent over the network
+func newPacketPublishRel(properties PublishRelProperties) *packet {
+	return &packet{ptype: ptypePubrel, pflags: pflagsPubrel, properties: properties}
+}
+
+// newPacketPublishComp creates a new PUBCOMP packet ready to be encoded and sent over the network
+func newPacketPublishComp(properties PublishCompProperties) *packet {
+	return &packet{ptype: ptypePubcomp, pflags: pflagsPubcomp, properties: properties}
+}
+
+// newPacketSubscribe creates a new SUBSCRIBE packet ready to be encoded and sent over the network
+func newPacketSubscribe(properties SubscribeProperties, payload SubscribePayload) *packet {
+	return &packet{ptype: ptypeSubscribe, pflags: pflagsSubscribe, properties: properties, payload: payload.Encode()}
+}
+
+// newPacketSubscribeAck creates a new SUBACK packet ready to be encoded and sent over the network
+func newPacketSubscribeAck(properties SubscribeAckProperties, payload SubscribeAckPayload) *packet {
+	return &packet{ptype: ptypeSuback, pflags: pflagsSuback, properties: properties, payload: payload.Encode()}
+}
+
+// newPacketSubscribe creates a new UNSUBCRIBE packet ready to be encoded and sent over the network
+func newPacketUnsubscribe(properties UnsubscribePayload, payload UnsubscribePayload) *packet {
+	return &packet{ptype: ptypeUnsubscribe, pflags: pflagsUnsubscribe, properties: properties, payload: payload.Encode()}
+}
+
+// newPacketUnsubscribeAck creates a new UNSUBACK packet ready to be encoded and sent over the network
+func newPacketUnsubscribeAck(properties UnsubscribeAckPayload) *packet {
+	return &packet{ptype: ptypeUnsuback, pflags: pflagsUnsuback, properties: properties}
+}
+
+// newPacketPingReq creates a new PINGREQ packet ready to be encoded and sent over the network
+func newPacketPingReq() *packet {
+	return &packet{ptype: ptypePingreq, pflags: pflagsPingreq}
+}
+
+// newPacketPingResp creates a new PINGRESP packet ready to be encoded and sent over the network
+func newPacketPingResp() *packet {
+	return &packet{ptype: ptypePingresp, pflags: pflagsPingresp}
+}
+
+// newPacketDisconnect creates a new DISCONNECT packet ready to be encoded and sent over the network
+func newPacketDisconnect() {
+	return &packet{ptype: ptypeDisconnect, pflags: pflagsDisconnect}
 }

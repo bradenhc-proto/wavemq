@@ -10,8 +10,8 @@ type Client struct {
 	Name        string
 	Persist     bool
 	Sessions    map[string]Session
-	publishers  map[string]*PublishChannel
-	subscribers map[string]*SubscribeChannel
+	publishers  map[string]*Publisher
+	subscribers map[string]*Subscriber
 	messages    map[string]bool
 }
 
@@ -31,15 +31,15 @@ func (c *Client) Close() error {
 }
 
 // SubscribeTo ...
-func (c *Client) SubscribeTo(topic Topic) *SubscribeChannel {
+func (c *Client) SubscribeTo(topic Topic) *Subscriber {
 	c.registerMessage(topic.Message)
-	return NewSubscribeChannel(&topic)
+	return NewSubscriber(&topic)
 }
 
 // PublishOn ...
-func (c *Client) PublishOn(topic Topic) *PublishChannel {
+func (c *Client) PublishOn(topic Topic) *Publisher {
 	c.registerMessage(topic.Message)
-	return NewPublishChannel(&topic)
+	return NewPublisher(&topic)
 }
 
 // registerMessage will add the provided message type to the list of messages that this client knows how to

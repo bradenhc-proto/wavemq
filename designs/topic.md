@@ -34,5 +34,5 @@ func (m *MyCustomMessage) Decode([]byte) (error) {
 t := Topic{name: "my-topic", message: MyCustomMessage{}}
 ```
 
-Inside of the `PublishChannel` and `SubscribeChannel`, WaveMQ will use the appropriate encoder defined inside the
+Inside of the `Publisher` and `Subscriber`, WaveMQ will use the appropriate encoder defined inside the
 `Topic` when sending/receiving messages synchronously or asynchronously.
